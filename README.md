@@ -1,5 +1,215 @@
 # My MFE Project
 
-Micro Frontend Module Federation with React — Host + 2 Remotes
+A complete **Micro Frontend (MFE) Module Federation** example using **React 18** and **Webpack 5**.  
+The project is composed of one **Host (Shell)** application and **two Remote** micro frontends that are independently deployable and loaded at runtime.
 
-Setting up project...
+---
+
+## Architecture
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                    HOST APP  (port 3000)                     │
+│  ┌──────────────────────────────────────────────────────┐   │
+│  │  BrowserRouter  │  NavBar: Home | Cart | Search      │   │
+│  │                                                      │   │
+│  │   /        → HomePage (local)                       │   │
+│  │   /cart    → CartPage    ◄─── cart@localhost:3001   │   │
+│  │   /search  → SearchBar  ◄─── search@localhost:3002  │   │
+│  │             SearchResults ◄── search@localhost:3002  │   │
+│  └──────────────────────────────────────────────────────┘   │
+└──────────────────────────────────────────────────────────────┘
+           ▲                          ▲
+           │  remoteEntry.js          │  remoteEntry.js
+           │                          │
+┌──────────┴──────────┐    ┌──────────┴──────────┐
+│  MFE-CART (3001)    │    │  MFE-SEARCH (3002)  │
+│  exposes:           │    │  exposes:            │
+│    ./CartPage       │    │    ./SearchBar       │
+│    ./CartIcon       │    │    ./SearchResults   │
+└─────────────────────┘    └─────────────────────┘
+```
+
+---
+
+## Project Structure
+
+```
+my-mfe-project/
+├── README.md
+├── host/                        # Shell / Host app
+│   ├── package.json
+│   ├── webpack.config.js
+│   ├── public/
+│   │   └── index.html
+│   └── src/
+│       ├── index.js             # Async bootstrap entry
+│       ├── bootstrap.js         # ReactDOM.createRoot
+│       └── App.jsx              # Router + lazy remotes + error boundary
+│
+├── mfe-cart/                    # Cart Remote (port 3001)
+│   ├── package.json
+│   ├── webpack.config.js
+│   ├── public/
+│   │   └── index.html
+│   └── src/
+│       ├── index.js
+│       ├── bootstrap.js
+│       ├── CartPage.jsx         # Shopping cart with remove & total
+│       └── CartIcon.jsx         # Cart icon with badge
+│
+└── mfe-search/                  # Search Remote (port 3002)
+    ├── package.json
+    ├── webpack.config.js
+    ├── public/
+    │   └── index.html
+    └── src/
+        ├── index.js
+        ├── bootstrap.js
+        ├── SearchBar.jsx        # Search input + button
+        └── SearchResults.jsx    # Filtered product grid
+```
+
+---
+
+## Prerequisites
+
+- **Node.js** ≥ 16 (LTS recommended)
+- **npm** ≥ 8
+
+---
+
+## Quick Start
+
+Open **three terminal windows** and run each app independently:
+
+### Terminal 1 — Cart Remote (must start first or alongside)
+```bash
+cd mfe-cart
+npm install
+npm start
+# → http://localhost:3001
+```
+
+### Terminal 2 — Search Remote
+```bash
+cd mfe-search
+npm install
+npm start
+# → http://localhost:3002
+```
+
+### Terminal 3 — Host App
+```bash
+cd host
+npm install
+npm start
+# → http://localhost:3000
+```
+
+> **Tip:** The remotes (3001, 3002) must be running before you navigate to `/cart` or `/search` in the host. If they are down, the Error Boundary shows a graceful fallback message.
+
+---
+
+## Port Mapping
+
+| App           | Port  | URL                        | Role          |
+|---------------|-------|----------------------------|---------------|
+| `host`        | 3000  | http://localhost:3000      | Shell / Host  |
+| `mfe-cart`    | 3001  | http://localhost:3001      | Cart Remote   |
+| `mfe-search`  | 3002  | http://localhost:3002      | Search Remote |
+
+---
+
+## Key Concepts
+
+### Host
+The main application that acts as the shell. It is responsible for routing and orchestrating which remote modules to load. It does **not** contain the business logic of remotes.
+
+### Remote
+An independently built and deployed micro-frontend that **exposes** components via `remoteEntry.js`. Each remote can also run **standalone** (e.g., `http://localhost:3001` renders `CartPage` directly).
+
+### `exposes`
+The components a remote makes available to the outside world. Defined in the remote's `ModuleFederationPlugin` config:
+```js
+exposes: {
+  "./CartPage": "./src/CartPage",
+  "./CartIcon": "./src/CartIcon",
+}
+```
+
+### `remotes`
+The host declares which remotes it wants to consume and where to find their `remoteEntry.js`:
+```js
+remotes: {
+  cart:   "cart@http://localhost:3001/remoteEntry.js",
+  search: "search@http://localhost:3002/remoteEntry.js",
+}
+```
+
+### `shared`
+Dependencies shared between host and remotes to avoid duplicate bundles (e.g., React). Using `singleton: true` ensures only one instance exists at runtime:
+```js
+shared: {
+  react:          { singleton: true, requiredVersion: "^18.2.0" },
+  "react-dom":    { singleton: true, requiredVersion: "^18.2.0" },
+}
+```
+
+### `remoteEntry.js`
+The manifest file generated by Webpack for each remote. It maps exposed component names to their chunk URLs. The host fetches this file at runtime to discover what the remote has to offer.
+
+### Async Bootstrap Pattern
+Because Module Federation requires an async chunk load before the shared scope is initialised, the real app entry is deferred with a dynamic import:
+```js
+// index.js  (synchronous entry — only one line)
+import("./bootstrap");
+
+// bootstrap.js  (the actual app startup)
+import React from "react";
+import ReactDOM from "react-dom/client";
+// ...
+```
+
+---
+
+## How to Add a New Exposed Component
+
+1. Create the component file inside the remote's `src/`, e.g. `mfe-cart/src/CartSummary.jsx`.
+2. Add it to `exposes` in `mfe-cart/webpack.config.js`:
+   ```js
+   "./CartSummary": "./src/CartSummary",
+   ```
+3. Consume it in the host with `React.lazy`:
+   ```js
+   const CartSummary = lazy(() => import("cart/CartSummary"));
+   ```
+
+## How to Add a New Remote
+
+1. Copy an existing remote folder as a template (e.g. `mfe-cart/`).
+2. Update `name`, `filename`, `exposes`, `port` in its `webpack.config.js`.
+3. Register the new remote in `host/webpack.config.js`:
+   ```js
+   remotes: {
+     myNew: "myNew@http://localhost:3003/remoteEntry.js",
+   }
+   ```
+4. Add `React.lazy` imports and a `<Route>` in `host/src/App.jsx`.
+
+---
+
+## Tech Stack
+
+| Technology | Version | Purpose |
+|---|---|---|
+| React | ^18.2.0 | UI library |
+| react-dom | ^18.2.0 | DOM renderer |
+| react-router-dom | ^6.20.0 | Client-side routing (host only) |
+| Webpack | ^5.89.0 | Bundler |
+| ModuleFederationPlugin | (built-in) | MFE runtime linking |
+| HtmlWebpackPlugin | ^5.5.4 | HTML generation |
+| babel-loader | ^9.1.3 | JSX / ES2015+ transpilation |
+| @babel/preset-env | ^7.23.5 | Modern JS transpilation |
+| @babel/preset-react | ^7.23.3 | JSX transpilation |
+| webpack-dev-server | ^4.15.1 | Development server with HMR |
